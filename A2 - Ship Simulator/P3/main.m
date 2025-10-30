@@ -5,25 +5,25 @@
 
 % Add folder for 3-D visualization files
 addpath(genpath('flypath3d_v2'))
+load('WP.mat')
 
 %% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % USER INPUTS
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 clc; clear; close all;
-T_final = 1000;	        % Final simulation time (s)
+T_final = 10000;	        % Final simulation time (s)
 h = 0.1;                % Sampling time (s)
-
-psi_ref = 10 * pi/180;  % desired yaw angle (rad)
-
 U_ref   = 9;            % desired surge speed (m/s)
 
 % initial states
-eta_0 = [0 0 0]';
+eta_0 = [0 0 -110*pi/180]';
 nu_0  = [0 0 0]';
 delta_0 = 0;
 n_0 = 0;
 Qm_0 = 0;
 x = [nu_0' eta_0' delta_0 n_0 Qm_0]'; % The state vector can be extended with addional states here
+
+% Guidance model initialization
 
 % Reference model initialization
 xd = [0; 0; 0];  % [psi_d, r_d, v_d]
@@ -46,7 +46,9 @@ ki = (wn/10)*kp;
 
 % Actuator limits
 delta_max  = deg2rad(40);   % max rudder angle [rad]
-Ddelta_max = deg2rad(5);    % max rudder rate [rad/s] 
+Ddelta_max = deg2rad(5);    % max rudder rate [rad/s]
+
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % MAIN LOOP
@@ -92,15 +94,13 @@ for i = 1:nTimeSteps
     tau_wind = [0 Ywind Nwind]';
     
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    % Part 2, 2d) Add a reference model here 
-    % Define it as a function
-    % check eq. (15.143) in (Fossen, 2021) for help
-    %
-    % The result should look like this:
-    % xd_dot = ref_model(xd,psi_ref(i));
-    % psi_d = xd(1);
-    % r_d = xd(2);
+    % Part 3 - Task 1
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    % Guidance law
+    [xk1,yk1,xk,yk,last] = WP_selector(x(4),x(5));
+    [e_y,pi_p] = crossTrackError(xk1,yk1,xk,yk,x(4),x(5));
+    chi_d = LOS_guidance(e_y,pi_p);
+    psi_ref = chi_d;
     xd_dot = ref_model(xd, psi_ref);
     xd = xd + h * xd_dot;
     psi_d = xd(1);
@@ -243,4 +243,7 @@ flypath('flypath3d_v2/ship1.mat',...
 'view',[-25 35],'window',[900 900],...
 'xlim', [min(y)-0.1*max(abs(y)),max(y)+0.1*max(abs(y))],... 
 'ylim', [min(x)-0.1*max(abs(x)),max(x)+0.1*max(abs(x))], ...
-'zlim', [-max(max(abs(x)),max(abs(y)))/100,max(max(abs(x)),max(abs(y)))/20]); 
+'zlim', [-max(max(abs(x)),max(abs(y)))/100,max(max(abs(x)),max(abs(y)))/20]);
+
+% Plot the path
+pathplotter(x, y);

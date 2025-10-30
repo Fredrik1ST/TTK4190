@@ -10,7 +10,7 @@ addpath(genpath('flypath3d_v2'))
 % USER INPUTS
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 clc; clear; close all;
-T_final = 1000;	        % Final simulation time (s)
+T_final = 10000;	        % Final simulation time (s)
 h = 0.1;                % Sampling time (s)
 
 psi_ref = 10 * pi/180;  % desired yaw angle (rad)
@@ -18,7 +18,7 @@ psi_ref = 10 * pi/180;  % desired yaw angle (rad)
 U_ref   = 9;            % desired surge speed (m/s)
 
 % initial states
-eta_0 = [0 0 0]';
+eta_0 = [0 0 -110*pi/180]';
 nu_0  = [0 0 0]';
 delta_0 = 0;
 n_0 = 0;
@@ -48,6 +48,20 @@ ki = (wn/10)*kp;
 delta_max  = deg2rad(40);   % max rudder angle [rad]
 Ddelta_max = deg2rad(5);    % max rudder rate [rad/s] 
 
+% --- LOS params ---
+Delta_h  = 600;   % look-ahead [m] (≈ 1–3 ship lengths)
+R_switch = 500;   % switch radius [m]
+clear LOSchi      % reset persistent waypoint index
+S = load("WP.mat");
+
+M = S.WP;
+wpt.pos.x = M(1,:).';
+wpt.pos.y = M(2,:).';
+
+last_wp = [wpt.pos.x(end); wpt.pos.y(end)];   % last waypoint [North; East]
+R_stop  = 50;    % stop radius in meters
+
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % MAIN LOOP
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -58,7 +72,7 @@ simdata = zeros(nTimeSteps, 13); % Pre-allocate matrix for efficiency
 
 for i = 1:nTimeSteps
     % --- Time-varying heading reference ---
-    %{
+    %{600m
     if t(i) < 500
         psi_ref = 10 * pi/180;     % +10 deg
     else
@@ -147,7 +161,15 @@ for i = 1:nTimeSteps
     % The result should look like this:
     % n_c = closed_loop_speed_control(u_d,e_u,e_int_u);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    %n_c = closed_loop_speed_control(u_d, x(1), h);
+    
+    
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    % Part 4, 1a)    
+    xN = x(4);   
+    yE = x(5);
+    [chi_ref, y_e] = LOSchi(xN, yE, Delta_h, R_switch, wpt);
+    psi_ref = chi_ref;
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     
     % ship dynamics
     u = [delta_c n_c]';
@@ -169,7 +191,11 @@ for i = 1:nTimeSteps
         disp("  Simulation in progress:")
         fprintf('  %d%% complete\n', 0);
     end
-
+    dist_last = norm([xN; yE] - last_wp);
+    if dist_last <= R_stop
+        fprintf('Reached final waypoint at t = %.1f s (distance = %.1f m)\n', t(i), dist_last);
+        break
+    end
 end
 simdata = simdata(1:i,:);
 t = t(1:i);
@@ -198,6 +224,9 @@ figure(3)
 figure(gcf)
 subplot(311)
 plot(y,x,'linewidth',2); axis('equal')
+%%%%%%%%%%%%added by Bendik%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%added by Bendik%%%%%%%%%%%%%%%%%
 title('North-East positions'); xlabel('(m)'); ylabel('(m)'); 
 subplot(312)
 plot(t,psi_deg,t,psi_d_deg,'linewidth',2);
@@ -244,3 +273,5 @@ flypath('flypath3d_v2/ship1.mat',...
 'xlim', [min(y)-0.1*max(abs(y)),max(y)+0.1*max(abs(y))],... 
 'ylim', [min(x)-0.1*max(abs(x)),max(x)+0.1*max(abs(x))], ...
 'zlim', [-max(max(abs(x)),max(abs(y)))/100,max(max(abs(x)),max(abs(y)))/20]); 
+
+pathplotter(x, y)

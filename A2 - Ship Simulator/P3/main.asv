@@ -10,7 +10,7 @@ addpath(genpath('flypath3d_v2'))
 % USER INPUTS
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 clc; clear; close all;
-T_final = 1000;	        % Final simulation time (s)
+T_final = 10000;	        % Final simulation time (s)
 h = 0.1;                % Sampling time (s)
 
 psi_ref = 10 * pi/180;  % desired yaw angle (rad)
@@ -18,16 +18,49 @@ psi_ref = 10 * pi/180;  % desired yaw angle (rad)
 U_ref   = 9;            % desired surge speed (m/s)
 
 % initial states
-eta_0 = [0 0 0]';
+eta_0 = [0 0 -110*pi/180]';
 nu_0  = [0 0 0]';
 delta_0 = 0;
 n_0 = 0;
 Qm_0 = 0;
 x = [nu_0' eta_0' delta_0 n_0 Qm_0]'; % The state vector can be extended with addional states here
-e_int = 0; 
 
 % Reference model initialization
 xd = [0; 0; 0];  % [psi_d, r_d, v_d]
+
+% PID control initialization
+e_int = 0;
+wb   = 0.06; zeta = 1.0; alpha = 1.0;
+T_nom = 43.27096; K_nom = -1.17154e-4;
+
+wn = wb/sqrt(1-2*zeta^2+sqrt(4*zeta^4-4*zeta^2+2));
+k2_c = 7.4931e-03;
+T2_c = -169.55;
+m = T2_c/k2_c;
+d = 1/k2_c;
+k = 0;
+
+kp = wn^2*m-k;
+kd = 2*zeta*wn*m - d;
+ki = (wn/10)*kp;
+
+% Actuator limits
+delta_max  = deg2rad(40);   % max rudder angle [rad]
+Ddelta_max = deg2rad(5);    % max rudder rate [rad/s] 
+
+% --- LOS params ---
+Delta_h  = 600;   % look-ahead [m] (≈ 1–3 ship lengths)
+R_switch = 500;   % switch radius [m]
+clear LOSchi      % reset persistent waypoint index
+S = load("WP.mat");
+
+M = S.WP;
+wpt.pos.x = M(1,:).';
+wpt.pos.y = M(2,:).';
+
+last_wp = [wpt.pos.x(end); wpt.pos.y(end)];   % last waypoint [North; East]
+R_stop  = 50;    % stop radius in meters
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % MAIN LOOP
@@ -95,47 +128,20 @@ for i = 1:nTimeSteps
     %
     % The result should look like this:
     % delta_c = PID_heading(e_psi,e_r,e_int);
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    wb   = 0.06; zeta = 1.0; alpha = 1.0;
-    T_nom = 43.27096; K_nom = -1.17154e-4;
-    a2 = (2*zeta + alpha)*wb; a1 = (1 + 2*zeta)*wb^2; a0 = alpha*wb^3;
-
-    wn = wb/sqrt(1-2*zeta^2+sqrt(4*zeta^4-4*zeta^2+2));
-
-    m = T_nom/K_nom;
-    d = 1/K_nom;
-    k = 0;
-    
-    kp = wn^2*m;
-    kd = 2*zeta*wn*m - d;
-    ki = (wn/10)*kp;
-
-    delta_unsat = -(P.kp*e_psi + P.kd*e_r + P.ki*e_int);
-
-    % Saturation
-    delta_c = min(max(delta_unsat, -P.delta_max), P.delta_max);
-
-    % Anti-windup
-    e_int_dot = e_psi - (1/P.ki)*(delta_c - delta_unsat);
-    e_int = e_int + P.h * e_int_dot;
-
-    P.kp = kp; P.kd = kd; P.ki = ki;
-    
-    % Actuator limits
-    P.delta_max  = deg2rad(40);   % max rudder angle [rad]
-    P.Ddelta_max = deg2rad(5);    % max rudder rate [rad/s]
-    
-    % Sample time and anti-windup settings
-    P.h    = h;                   % simulation step
-    P.delta_prev = 0.0;           % previous command (for rate limit)
-    assignin('base','PIDH_PERSIST',P);  
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
 
     psi = x(6);
     r   = x(3);
     e_psi = ssa(psi_d-psi);
-    e_r   = r_d - r;
-    e_int = e_int + h*e_psi;
-    [delta_c] = PID_heading(e_psi, e_r,e_int);
+    e_r   = r_d-r;
+    delta_unsat = -(kp*e_psi + kd*e_r + ki*e_int);
+
+    % Saturation
+    delta_c = min(max(delta_unsat, -delta_max), delta_max);
+
+    % Anti-windup
+    e_int_dot = e_psi - (1/ki)*(delta_c - delta_unsat);
+    e_int = e_int + h * e_int_dot;
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Part 2, 3e) Add open loop speed control here
@@ -155,7 +161,18 @@ for i = 1:nTimeSteps
     % The result should look like this:
     % n_c = closed_loop_speed_control(u_d,e_u,e_int_u);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    %n_c = closed_loop_speed_control(u_d, x(1), h);
+    
+    
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    % Part 4, 1a)    
+    xN = x(4);   
+    yE = x(5);
+    dist_last = norm([xN; yE] - last_wp);
+    
+
+    [chi_ref, y_e] = LOSchi(xN, yE, Delta_h, R_switch, wpt);
+    psi_ref = chi_ref;
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     
     % ship dynamics
     u = [delta_c n_c]';
@@ -177,7 +194,7 @@ for i = 1:nTimeSteps
         disp("  Simulation in progress:")
         fprintf('  %d%% complete\n', 0);
     end
-
+    
 end
 simdata = simdata(1:i,:);
 t = t(1:i);
@@ -206,6 +223,9 @@ figure(3)
 figure(gcf)
 subplot(311)
 plot(y,x,'linewidth',2); axis('equal')
+%%%%%%%%%%%%added by Bendik%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%added by Bendik%%%%%%%%%%%%%%%%%
 title('North-East positions'); xlabel('(m)'); ylabel('(m)'); 
 subplot(312)
 plot(t,psi_deg,t,psi_d_deg,'linewidth',2);
@@ -252,3 +272,5 @@ flypath('flypath3d_v2/ship1.mat',...
 'xlim', [min(y)-0.1*max(abs(y)),max(y)+0.1*max(abs(y))],... 
 'ylim', [min(x)-0.1*max(abs(x)),max(x)+0.1*max(abs(x))], ...
 'zlim', [-max(max(abs(x)),max(abs(y)))/100,max(max(abs(x)),max(abs(y)))/20]); 
+
+pathplotter(x, y)

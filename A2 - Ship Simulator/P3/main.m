@@ -72,7 +72,7 @@ simdata = zeros(nTimeSteps, 13); % Pre-allocate matrix for efficiency
 
 for i = 1:nTimeSteps
     % --- Time-varying heading reference ---
-    %{600m
+    %{
     if t(i) < 500
         psi_ref = 10 * pi/180;     % +10 deg
     else
@@ -167,6 +167,7 @@ for i = 1:nTimeSteps
     % Part 4, 1a)    
     xN = x(4);   
     yE = x(5);
+    dist_last = norm([xN; yE] - last_wp);
     [chi_ref, y_e] = LOSchi(xN, yE, Delta_h, R_switch, wpt);
     psi_ref = chi_ref;
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -191,7 +192,6 @@ for i = 1:nTimeSteps
         disp("  Simulation in progress:")
         fprintf('  %d%% complete\n', 0);
     end
-    dist_last = norm([xN; yE] - last_wp);
     if dist_last <= R_stop
         fprintf('Reached final waypoint at t = %.1f s (distance = %.1f m)\n', t(i), dist_last);
         break

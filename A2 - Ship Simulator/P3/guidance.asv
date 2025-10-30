@@ -1,6 +1,0 @@
-function [chi_d, seg, y_e, chi_p] = guidance(p_xy, W, seg, Delta, R_switch)
-    load 
-    delta = 1 % distance between waypoint
-    K_p = 1 / delta;
-    X_d = pi_p  -tan^-1(K_p*Y_e);
-end

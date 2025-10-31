@@ -4,7 +4,6 @@ function [e_y, pi_p] = crossTrackError(xk1, yk1, xk, yk, xE, yN)
 
     dx   = xk1 - xk; 
     dy   = yk1 - yk;
-    L    = hypot(dx, dy) + 1e-9;
     pi_p = atan2(dy, dx);  % [rad], N->E konvensjon
 
     % Rotér posfeil inn i bane-ramme (t: langs, n: tverrsnitt)

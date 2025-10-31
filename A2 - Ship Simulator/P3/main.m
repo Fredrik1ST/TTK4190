@@ -5,13 +5,12 @@
 
 % Add folder for 3-D visualization files
 addpath(genpath('flypath3d_v2'))
-load('WP.mat')
 
 %% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % USER INPUTS
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-clc; clear; close all;
-T_final = 10000;	        % Final simulation time (s)
+clc; clear; clear WP_selector; close all; 
+T_final = 7000;	        % Final simulation time (s)
 h = 0.1;                % Sampling time (s)
 U_ref   = 9;            % desired surge speed (m/s)
 
@@ -23,7 +22,6 @@ n_0 = 0;
 Qm_0 = 0;
 x = [nu_0' eta_0' delta_0 n_0 Qm_0]'; % The state vector can be extended with addional states here
 
-% Guidance model initialization
 
 % Reference model initialization
 xd = [0; 0; 0];  % [psi_d, r_d, v_d]
@@ -57,6 +55,12 @@ t = 0:h:T_final;                % Time vector
 nTimeSteps = length(t);         % Number of time steps
 
 simdata = zeros(nTimeSteps, 13); % Pre-allocate matrix for efficiency
+
+% Guidance model initialization
+% --- Waypoints ---
+S = load('WP.mat');                 
+WP = S.WP;
+i_end = nTimeSteps;
 
 for i = 1:nTimeSteps
     % --- Time-varying heading reference ---
@@ -97,7 +101,7 @@ for i = 1:nTimeSteps
     % Part 3 - Task 1
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Guidance law
-    [xk1,yk1,xk,yk,last] = WP_selector(x(4),x(5));
+    [xk1,yk1,xk,yk,last] = WP_selector(x(4),x(5), WP);
     [e_y,pi_p] = crossTrackError(xk1,yk1,xk,yk,x(4),x(5));
     chi_d = LOS_guidance(e_y,pi_p);
     psi_ref = chi_d;
@@ -168,6 +172,18 @@ for i = 1:nTimeSteps
     elseif i == 1
         disp("  Simulation in progress:")
         fprintf('  %d%% complete\n', 0);
+    end
+
+    if last
+        i_end = i;  % siste gyldige indeks i denne simuleringen
+
+        % (valgfritt) Logg en siste rad så plott ikke blir tomt helt på slutten
+        % Her logger vi med "null" kommandoer for tydelig slutt
+        psi_d = x(6); r_d = 0; u_d = U_ref;   % beholder samme referanser
+        simdata(i,:) = [x(1:3)' x(4:6)' x(7) x(8) 0 0 u_d psi_d r_d];
+
+        fprintf('  Reached final waypoint at t = %.1f s (step %d)\n', (i-1)*h, i);
+        break
     end
 
 end

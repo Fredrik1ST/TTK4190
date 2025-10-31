@@ -10,6 +10,7 @@ addpath(genpath('flypath3d_v2'))
 % USER INPUTS
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 clc; clear; close all;
+clear LOSchi
 T_final = 10000;	        % Final simulation time (s)
 h = 0.1;                % Sampling time (s)
 
@@ -51,7 +52,6 @@ Ddelta_max = deg2rad(5);    % max rudder rate [rad/s]
 % --- LOS params ---
 Delta_h  = 600;   % look-ahead [m] (≈ 1–3 ship lengths)
 R_switch = 500;   % switch radius [m]
-clear LOSchi      % reset persistent waypoint index
 S = load("WP.mat");
 
 M = S.WP;
@@ -80,19 +80,14 @@ for i = 1:nTimeSteps
     end
     %}
     
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Part 2, 1a) 2D irrotational current  
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Vc = 1;                         % (m/s)
     betaVc = 45*pi/180;             % 45 deg CW from N -> NE (rad)
-    
     uc = Vc * cos(betaVc - x(6));   % BODY Surge current (m/s)
     vc = Vc * sin(betaVc - x(6));   % BODY Sway current (m/s)
     nu_c = [ uc vc 0 ]';
     
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Part 2, 1c) Add wind here 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%
     Vw = 10;                % wind speed (m/s)
     beta_Vw = deg2rad(135); % wind speed direction
     rho_a = 1.247;          % air density
@@ -105,16 +100,15 @@ for i = 1:nTimeSteps
     Nwind = 0.5*rho_a*Vw^2*c_n*A_Lw*L;  % Equation from Fossen ch 10.1
     tau_wind = [0 Ywind Nwind]';
     
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+    % LOS - Part 4, 1a)    
+    xN = x(4);   
+    yE = x(5);
+    [chi_ref, y_e] = LOSchi(xN, yE, Delta_h, R_switch, wpt);
+    psi_ref = chi_ref;
+
+
     % Part 2, 2d) Add a reference model here 
-    % Define it as a function
-    % check eq. (15.143) in (Fossen, 2021) for help
-    %
-    % The result should look like this:
-    % xd_dot = ref_model(xd,psi_ref(i));
-    % psi_d = xd(1);
-    % r_d = xd(2);
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     xd_dot = ref_model(xd, psi_ref);
     xd = xd + h * xd_dot;
     psi_d = xd(1);
@@ -122,14 +116,8 @@ for i = 1:nTimeSteps
     r_d_dot = xd_dot(2);
     u_d = U_ref;
     
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    
     % Part 2, 2d) Add the heading controller here 
-    % Define it as a function
-    %
-    % The result should look like this:
-    % delta_c = PID_heading(e_psi,e_r,e_int);
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
-
     psi = x(6);
     r   = x(3);
     e_psi = ssa(psi_d-psi);
@@ -143,35 +131,10 @@ for i = 1:nTimeSteps
     e_int_dot = e_psi - (1/ki)*(delta_c - delta_unsat);
     e_int = e_int + h * e_int_dot;
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    % Part 2, 3e) Add open loop speed control here
-    % Define it as a function
-    %
-    % The result should look like this:
-    % n_c = open_loop_speed_control(U_ref);
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    % Part 2, 3e and f?) Add open loop speed control here
     n_c = open_loop_speed_control(U_ref);
-    %n_c = 10;                   % propeller speed [radians per second (rps)]
+    %n_c = 10; % propeller speed [radians per second (rps)]
 
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    % Part 2, 3f) Replace the open loop speed controller, 
-    % with a closed loop speed controller here 
-    % Define it as a function
-    %
-    % The result should look like this:
-    % n_c = closed_loop_speed_control(u_d,e_u,e_int_u);
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    
-    
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    % Part 4, 1a)    
-    xN = x(4);   
-    yE = x(5);
-    dist_last = norm([xN; yE] - last_wp);
-    [chi_ref, y_e] = LOSchi(xN, yE, Delta_h, R_switch, wpt);
-    psi_ref = chi_ref;
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    
     % ship dynamics
     u = [delta_c n_c]';
     [xdot,tau_total] = ship(x,u,nu_c,tau_wind);
@@ -192,6 +155,11 @@ for i = 1:nTimeSteps
         disp("  Simulation in progress:")
         fprintf('  %d%% complete\n', 0);
     end
+
+    % Stop simulation condition
+    xN = x(4); 
+    yE = x(5);
+    dist_last = norm([xN; yE] - last_wp);
     if dist_last <= R_stop
         fprintf('Reached final waypoint at t = %.1f s (distance = %.1f m)\n', t(i), dist_last);
         break
@@ -224,9 +192,6 @@ figure(3)
 figure(gcf)
 subplot(311)
 plot(y,x,'linewidth',2); axis('equal')
-%%%%%%%%%%%%added by Bendik%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%added by Bendik%%%%%%%%%%%%%%%%%
 title('North-East positions'); xlabel('(m)'); ylabel('(m)'); 
 subplot(312)
 plot(t,psi_deg,t,psi_d_deg,'linewidth',2);

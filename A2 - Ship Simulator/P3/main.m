@@ -29,13 +29,12 @@ xd = [0; 0; 0];  % [psi_d, r_d, v_d]
 % PID control initialization
 e_int = 0;
 wb   = 0.06; zeta = 1.0; alpha = 1.0;
-T_nom = 43.27096; K_nom = -1.17154e-4;
 
 wn = wb/sqrt(1-2*zeta^2+sqrt(4*zeta^4-4*zeta^2+2));
-k2_c = 7.4931e-03;
-T2_c = -169.55;
-m = T2_c/k2_c;
-d = 1/k2_c;
+K_nom = 7.4931e-03;
+T_nom = 169.55;
+m = T_nom/K_nom;
+d = 1/K_nom;
 k = 0;
 
 kp = wn^2*m-k;
@@ -91,10 +90,21 @@ for i = 1:nTimeSteps
     c_y = 0.95;             % sway wind-force coefficient
     c_n = 0.15;             % Yaw wind-moment coefficient
     L = 161;                % Length of ship
-    A_Lw = 10*L;            % Area of side view above water. 
+    A_Lw = 10*L;            % Area of side view above water.
     
-    Ywind = 0.5*rho_a*Vw^2*c_y*A_Lw;    % Equation from Fossen ch 10.1
-    Nwind = 0.5*rho_a*Vw^2*c_n*A_Lw*L;  % Equation from Fossen ch 10.1
+    % Tilbakemelding fra studass
+    uw = Vw * cos(beta_Vw - x(6));
+    vw = Vw * sin(beta_Vw - x(6));
+    u_rw = x(1) - uw;
+    v_rw = x(2) - vw;
+    V_rw = sqrt(u_rw^2 + v_rw^2);
+    
+    gamma_rw = -atan2(v_rw,u_rw);
+    Ywind = 0.5 * rho_a * V_rw^2 * c_y*sin(gamma_rw) * A_Lw;
+    Nwind = 0.5 * rho_a * V_rw^2 * c_n*sin(2*gamma_rw) * A_Lw*L; 
+    
+    %Ywind = 0.5*rho_a*Vw^2*c_y*A_Lw;    % Equation from Fossen ch 10.1
+    %Nwind = 0.5*rho_a*Vw^2*c_n*A_Lw*L;  % Equation from Fossen ch 10.1
     tau_wind = [0 Ywind Nwind]';
     
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -122,8 +132,8 @@ for i = 1:nTimeSteps
 
     psi = x(6);
     r   = x(3);
-    e_psi = ssa(psi_d-psi);
-    e_r   = r_d-r;
+    e_psi = ssa(psi-psi_d);
+    e_r   = r-r_d;
     delta_unsat = -(kp*e_psi + kd*e_r + ki*e_int);
 
     % Saturation

@@ -9,8 +9,8 @@ addpath(genpath('flypath3d_v2'))
 %% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % USER INPUTS
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-clc; clear; clear WP_selector; close all; 
-T_final = 7000;	        % Final simulation time (s)
+clc; clear; clear WP_selector ILOS_guidance; close all; 
+T_final = 6500;	        % Final simulation time (s)
 h = 0.1;                % Sampling time (s)
 U_ref   = 9;            % desired surge speed (m/s)
 
@@ -53,12 +53,19 @@ Ddelta_max = deg2rad(5);    % max rudder rate [rad/s]
 t = 0:h:T_final;                % Time vector
 nTimeSteps = length(t);         % Number of time steps
 
-simdata = zeros(nTimeSteps, 13); % Pre-allocate matrix for efficiency
+simdata = zeros(nTimeSteps, 17); % Pre-allocate matrix for efficiency
 
 % Guidance model initialization
 % --- Waypoints ---
 S = load('WP.mat');                 
 WP = S.WP;
+
+Delta_h = 600; % Lookahead distance
+Rsw = 500; % Switch radius
+Rstop = 100; % End radius
+
+kappa = 1; % Design parameter for ILOS
+
 i_end = nTimeSteps;
 
 for i = 1:nTimeSteps
@@ -74,7 +81,8 @@ for i = 1:nTimeSteps
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Part 2, 1a) 2D irrotational current  
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    Vc = 1;                         % (m/s)
+    Vc = 1;
+    %Vc = 0;                         % (m/s)
     betaVc = 45*pi/180;             % 45 deg CW from N -> NE (rad)
     
     uc = Vc * cos(betaVc - x(6));   % BODY Surge current (m/s)
@@ -100,21 +108,36 @@ for i = 1:nTimeSteps
     V_rw = sqrt(u_rw^2 + v_rw^2);
     
     gamma_rw = -atan2(v_rw,u_rw);
-    Ywind = 0.5 * rho_a * V_rw^2 * c_y*sin(gamma_rw) * A_Lw;
-    Nwind = 0.5 * rho_a * V_rw^2 * c_n*sin(2*gamma_rw) * A_Lw*L; 
+    Ywind = 0.5 * rho_a * V_rw^2 * c_y*sin(gamma_rw) * A_Lw;       % Equation from Fossen ch 10.1
+    Nwind = 0.5 * rho_a * V_rw^2 * c_n*sin(2*gamma_rw) * A_Lw*L;   % Equation from Fossen ch 10.1
     
-    %Ywind = 0.5*rho_a*Vw^2*c_y*A_Lw;    % Equation from Fossen ch 10.1
-    %Nwind = 0.5*rho_a*Vw^2*c_n*A_Lw*L;  % Equation from Fossen ch 10.1
     tau_wind = [0 Ywind Nwind]';
-    
+
+    % Relative speed ocean currents
+    u_rc = x(1) - uc;
+    v_rc = x(2) - vc;
+    U_rc = sqrt(u_rc + v_rc);
+
+    % Defining sidelsip and crab angle
+    beta_c   = atan2(x(2), max(1e-9, x(1))); % Crab angle
+
+    % Course: chi = psi + beta_c  (gjelder eksakt når Vc=0)
+    psi    = x(6);
+    chi    = ssa(psi + beta_c);
+
+    % Sideslip angle
+    beta = atan2(v_rc, max(1e-9, u_rc));
+
+   
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Part 3 - Task 1
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Guidance law
-    [xk1,yk1,xk,yk,last] = WP_selector(x(4),x(5), WP);
+    [xk1,yk1,xk,yk,last] = WP_selector(x(4),x(5), WP, Rsw, Rstop);
     [e_y,pi_p] = crossTrackError(xk1,yk1,xk,yk,x(4),x(5));
-    chi_d = LOS_guidance(e_y,pi_p);
-    psi_ref = chi_d;
+    chi_d = LOS_guidance(e_y,pi_p, Delta_h);
+    psi_ref = chi_d - beta_c;
+    %psi_ref = ILOS_guidance(e_y, pi_p, kappa, Delta_h, h);
     xd_dot = ref_model(xd, psi_ref);
     xd = xd + h * xd_dot;
     psi_d = xd(1);
@@ -168,7 +191,7 @@ for i = 1:nTimeSteps
     [xdot,tau_total] = ship(x,u,nu_c,tau_wind);
     
     % store simulation data in a table (for testing)
-    simdata(i,:) = [x(1:3)' x(4:6)' x(7) x(8) u(1) u(2) u_d psi_d r_d];     
+    simdata(i,:) = [x(1:3)' x(4:6)' x(7) x(8) u(1) u(2) u_d psi_d r_d, chi, chi_d, beta_c, beta];     
  
     % Euler integration
     % x = euler2(xdot,x,h); 
@@ -190,7 +213,7 @@ for i = 1:nTimeSteps
         % (valgfritt) Logg en siste rad så plott ikke blir tomt helt på slutten
         % Her logger vi med "null" kommandoer for tydelig slutt
         psi_d = x(6); r_d = 0; u_d = U_ref;   % beholder samme referanser
-        simdata(i,:) = [x(1:3)' x(4:6)' x(7) x(8) 0 0 u_d psi_d r_d];
+        simdata(i,:) = [x(1:3)' x(4:6)' x(7) x(8) u(1) u(2) u_d psi_d r_d, chi, chi_d, beta_c, beta];  
 
         fprintf('  Reached final waypoint at t = %.1f s (step %d)\n', (i-1)*h, i);
         break
@@ -217,8 +240,16 @@ n_c         = (30/pi) * simdata(:,10);      % rpm
 u_d         = simdata(:,11);                % m/s
 psi_d       = simdata(:,12);                % rad
 psi_d_deg   = (180/pi) * psi_d;             % deg
-r_d         =  simdata(:,13);               % rad/s
+r_d         = simdata(:,13);               % rad/s
 r_d_deg     = (180/pi) * r_d;               % deg/s
+chi         = simdata(:,14);                % rad
+chi_deg     = (180/pi)* chi;                % deg
+chi_d       = simdata(:, 15);               % rad
+chi_d_deg   = (180/pi)*chi_d;               % deg
+beta_c      = simdata(:, 16);               % rad
+beta_c_deg  = (180/pi)*beta_c;               % deg
+beta        = simdata(:, 17);               % rad
+beta_deg    = (180/pi)*beta;                % deg
 %%
 figure(3)
 figure(gcf)
@@ -248,6 +279,18 @@ subplot(313)
 plot(t,delta_deg,t,delta_c_deg,'linewidth',2);
 title('Actual and commanded rudder angle'); xlabel('Time (s)'); ylabel('Angle (deg)');
 legend('actual rudder angle','commanded rudder angle')
+
+figure(4)
+figure(gcf)
+plot(t, chi_deg,   'LineWidth', 2); hold on;
+plot(t, chi_d_deg, 'LineWidth', 2);
+plot(t, psi_deg,   'LineWidth', 2);
+plot(t, beta_c_deg,'--',        'LineWidth', 1.5);
+plot(t, beta_deg,  '--',        'LineWidth', 1.5);
+grid on; xlabel('Time (s)'); ylabel('Angle (deg)');
+title('Course (χ), Desired Course (χ_d), Heading (ψ), Crab (β_c), Sideslip (β)');
+legend('\chi','\chi_d','\psi','\beta_c','\beta','Location','best');
+
 %% Create objects for 3-D visualization 
 % Since we only simulate 3-DOF we need to construct zero arrays for the 
 % excluded dimensions, including height, roll and pitch
@@ -261,7 +304,8 @@ new_object('flypath3d_v2/ship1.mat',[x,y,z,phi,theta,psi],...
 'edge',[0 0 0],'face',[0 0 0],'alpha',1,...
 'path','on','pathcolor',[.89 .0 .27],'pathwidth',2);
 
-% Plot trajectories 
+% Plot trajectories
+%{
 flypath('flypath3d_v2/ship1.mat',...
 'animate','on','step',500,...
 'axis','on','axiscolor',[0 0 0],'color',[1 1 1],...
@@ -270,6 +314,7 @@ flypath('flypath3d_v2/ship1.mat',...
 'xlim', [min(y)-0.1*max(abs(y)),max(y)+0.1*max(abs(y))],... 
 'ylim', [min(x)-0.1*max(abs(x)),max(x)+0.1*max(abs(x))], ...
 'zlim', [-max(max(abs(x)),max(abs(y)))/100,max(max(abs(x)),max(abs(y)))/20]);
+%}
 
 % Plot the path
 pathplotter(x, y);

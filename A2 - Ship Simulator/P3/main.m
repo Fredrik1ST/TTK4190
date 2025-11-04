@@ -10,7 +10,7 @@ addpath(genpath('flypath3d_v2'))
 % USER INPUTS
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 clc; clear; clear WP_selector ILOS_guidance; close all; 
-T_final = 6500;	        % Final simulation time (s)
+T_final = 6400;	        % Final simulation time (s)
 h = 0.1;                % Sampling time (s)
 U_ref   = 9;            % desired surge speed (m/s)
 
@@ -22,17 +22,23 @@ n_0 = 0;
 Qm_0 = 0;
 x = [nu_0' eta_0' delta_0 n_0 Qm_0]'; % The state vector can be extended with addional states here
 
+USE_KF = true;  % toggle: true -> use KF estimates; false -> use noisy measurements
+
 
 % Reference model initialization
 xd = [0; 0; 0];  % [psi_d, r_d, v_d]
 
 % PID control initialization
 e_int = 0;
-wb   = 0.06; zeta = 1.0; alpha = 1.0;
+%wb   = 0.06; zeta = 1.0;
+wb   = 0.03; zeta = 1.8; % Tuning for task 4d
 
 wn = wb/sqrt(1-2*zeta^2+sqrt(4*zeta^4-4*zeta^2+2));
 K_nom = 7.4931e-03;
 T_nom = 169.55;
+% Nomoto when Uref = 9 m/s
+%K_nom = 7.68e-03;
+%T_nom = 174.2;
 m = T_nom/K_nom;
 d = 1/K_nom;
 k = 0;
@@ -45,8 +51,6 @@ ki = (wn/10)*kp;
 delta_max  = deg2rad(40);   % max rudder angle [rad]
 Ddelta_max = deg2rad(5);    % max rudder rate [rad/s]
 
-
-
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % MAIN LOOP
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -54,6 +58,42 @@ t = 0:h:T_final;                % Time vector
 nTimeSteps = length(t);         % Number of time steps
 
 simdata = zeros(nTimeSteps, 17); % Pre-allocate matrix for efficiency
+
+% Kalman filter initialization
+rng(1)                             % reproducibility
+sigma_psi = deg2rad(0.5);          % [rad] std of yaw measurement noise
+sigma_r   = deg2rad(0.1);          % [rad/s] std of yaw-rate measurement noise
+
+psi_meas_hist = zeros(nTimeSteps,1);
+r_meas_hist   = zeros(nTimeSteps,1);
+psi_true_hist = zeros(nTimeSteps,1);
+r_true_hist   = zeros(nTimeSteps,1);
+psi_hat_hist = zeros(nTimeSteps,1);
+r_hat_hist   = zeros(nTimeSteps,1);
+b_hat_hist   = zeros(nTimeSteps,1);
+
+% === Continous model ===
+A = [0  1     0;
+     0 -1/T_nom  -K_nom/T_nom;
+     0  0     0];
+B = [0; K_nom/T_nom; 0];
+C = [1 0 0];
+E = [0 0; 1 0; 0 1];
+D = 0;
+
+% First-order discretization
+Ad = eye(3) + h*A;
+Bd = h*B;
+Cd = C;
+Ed = h*E;
+
+% KF initialization
+x_prd = [0;0;0];            % [psi_hat; r_hat; b_hat]
+P_prd = diag([(deg2rad(30))^2, (deg2rad(0.01))^2, (deg2rad(1))^2]);
+
+% Tuning (starting point – adjust during tests)
+Qd = diag([1e-11, 1e-7]);    % var{w_r}, var{w_b}
+Rd = sigma_psi^2;           % var of psi measurement
 
 % Guidance model initialization
 % --- Waypoints ---
@@ -116,7 +156,7 @@ for i = 1:nTimeSteps
     % Relative speed ocean currents
     u_rc = x(1) - uc;
     v_rc = x(2) - vc;
-    U_rc = sqrt(u_rc + v_rc);
+    U_rc = sqrt(u_rc^2 + v_rc^2);
 
     % Defining sidelsip and crab angle
     beta_c   = atan2(x(2), max(1e-9, x(1))); % Crab angle
@@ -136,8 +176,8 @@ for i = 1:nTimeSteps
     [xk1,yk1,xk,yk,last] = WP_selector(x(4),x(5), WP, Rsw, Rstop);
     [e_y,pi_p] = crossTrackError(xk1,yk1,xk,yk,x(4),x(5));
     chi_d = LOS_guidance(e_y,pi_p, Delta_h);
-    psi_ref = chi_d - beta_c;
-    %psi_ref = ILOS_guidance(e_y, pi_p, kappa, Delta_h, h);
+    %psi_ref = chi_d - beta_c;
+    psi_ref = ILOS_guidance(e_y, pi_p, kappa, Delta_h, h);
     xd_dot = ref_model(xd, psi_ref);
     xd = xd + h * xd_dot;
     psi_d = xd(1);
@@ -152,15 +192,52 @@ for i = 1:nTimeSteps
     % The result should look like this:
     % delta_c = PID_heading(e_psi,e_r,e_int);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
+    % ----- Noisy measurements (from true states) -----
+    psi_true = ssa(x(6));          % x = [u v r x y psi delta n Qm]'
+    r_true   = x(3);
+    
+    psi_meas = ssa(psi_true + randn*sigma_psi );
+    r_meas   = r_true   + randn*sigma_r;   % not used by KF, but useful for plots
+    
+    % Log for plotting
+    psi_meas_hist(i) = psi_meas;
+    r_meas_hist(i)   = r_meas;
+    psi_true_hist(i) = psi_true;
+    r_true_hist(i)   = r_true;
 
-    psi = x(6);
-    r   = x(3);
-    e_psi = ssa(psi-psi_d);
-    e_r   = r-r_d;
+    % Run the kalman filter
+
+    [x_pst,P_pst,x_prd,P_prd] = KF(x_prd,P_prd,Ad,Bd,Ed,Cd,Qd,Rd,psi_meas,x(7));
+
+    % Log for plotting
+    % Logg estimater
+    psi_hat_hist(i) = x_pst(1);
+    r_hat_hist(i)   = x_pst(2);
+    b_hat_hist(i)   = x_pst(3);
+
+
+    if USE_KF
+        psi_fb = x_pst(1);     % estimated yaw
+        r_fb   = x_pst(2);     % estimated yaw rate
+    else
+        %psi_fb = psi_meas; % noisy yaw
+        %r_fb = r_meas;     % noisy yaw rate
+        psi_fb = x(6);     % noisy yaw
+        r_fb   = x(3);       % noisy yaw rate
+    end
+
+    e_psi = ssa(psi_fb - psi_d);
+    e_r   = r_fb - r_d;
+    e_u   = x(1) - u_d;
     delta_unsat = -(kp*e_psi + kd*e_r + ki*e_int);
+
+    %delta_step = delta_unsat - delta_cmd;
+    %delta_step = max(-Ddelta_max*h, min(Ddelta_max*h, delta_step));
+    %delta_cmd  = delta_cmd + delta_step;
 
     % Saturation
     delta_c = min(max(delta_unsat, -delta_max), delta_max);
+    %delta_c = max(-delta_max, min(delta_max, delta_cmd));
 
     % Anti-windup
     e_int_dot = e_psi - (1/ki)*(delta_c - delta_unsat);
@@ -250,6 +327,15 @@ beta_c      = simdata(:, 16);               % rad
 beta_c_deg  = (180/pi)*beta_c;               % deg
 beta        = simdata(:, 17);               % rad
 beta_deg    = (180/pi)*beta;                % deg
+
+psi_meas_hist = psi_meas_hist(1:length(t));
+r_meas_hist   = r_meas_hist(1:length(t));
+psi_true_hist = psi_true_hist(1:length(t));
+r_true_hist   = r_true_hist(1:length(t));
+psi_hat_hist = psi_hat_hist(1:length(t));
+r_hat_hist   = r_hat_hist(1:length(t));
+b_hat_hist   = b_hat_hist(1:length(t));
+
 %%
 figure(3)
 figure(gcf)
@@ -290,6 +376,37 @@ plot(t, beta_deg,  '--',        'LineWidth', 1.5);
 grid on; xlabel('Time (s)'); ylabel('Angle (deg)');
 title('Course (χ), Desired Course (χ_d), Heading (ψ), Crab (β_c), Sideslip (β)');
 legend('\chi','\chi_d','\psi','\beta_c','\beta','Location','best');
+
+figure(5); clf; figure(gcf)
+subplot(2,1,1)
+plot(t, rad2deg(psi_meas_hist), 'LineWidth', 1.5); hold on
+plot(t, rad2deg(psi_true_hist), '--', 'LineWidth', 2)
+grid on; xlabel('Time (s)'); ylabel('\psi (deg)')
+title('Yaw angle: true vs noisy measurement')
+legend('noisy \psi (0.5^\circ \sigma)', 'true \psi','Location','best')
+subplot(2,1,2)
+plot(t, rad2deg(r_meas_hist), 'LineWidth', 1.5); hold on
+plot(t, rad2deg(r_true_hist),'--', 'LineWidth', 2)
+grid on; xlabel('Time (s)'); ylabel('r (deg/s)')
+title('Yaw rate: true vs noisy measurement')
+legend('noisy r (0.1^\circ/s \sigma)','true r','Location','best')
+
+figure(6); clf; figure(gcf)
+subplot(3,1,1)
+plot(t, rad2deg(psi_true_hist), 'LineWidth', 2); hold on
+plot(t, rad2deg(psi_hat_hist),  '--', 'LineWidth', 1.5)
+grid on; ylabel('\psi (deg)'); title('Yaw angle: true vs KF estimate')
+legend('true \psi','estimated $\hat{\psi}$', 'Interpreter','latex','Location','best')
+subplot(3,1,2)
+plot(t, rad2deg(r_true_hist), 'LineWidth', 2); hold on
+plot(t, rad2deg(r_hat_hist),  '--', 'LineWidth', 1.5)
+grid on; ylabel('r (deg/s)'); title('Yaw rate: true vs KF estimate')
+legend('true r','estimated $\hat{r}$','Interpreter','latex', 'Location','best')
+subplot(3,1,3)
+plot(t, rad2deg(b_hat_hist), 'LineWidth', 2)
+grid on; xlabel('Time (s)'); ylabel('b (deg)')
+title('Rudder bias estimate (no true bias available)')
+
 
 %% Create objects for 3-D visualization 
 % Since we only simulate 3-DOF we need to construct zero arrays for the 

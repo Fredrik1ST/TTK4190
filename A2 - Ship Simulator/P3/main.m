@@ -25,20 +25,22 @@ x = [nu_0' eta_0' delta_0 n_0 Qm_0]'; % The state vector can be extended with ad
 USE_KF = true;  % toggle: true -> use KF estimates; false -> use noisy measurements
 
 
+
 % Reference model initialization
 xd = [0; 0; 0];  % [psi_d, r_d, v_d]
 
 % PID control initialization
 e_int = 0;
-%wb   = 0.06; zeta = 1.0;
-wb   = 0.03; zeta = 1.8; % Tuning for task 4d
+%wb   = 0.06; zeta = 1.0; % Normal tuning from p2 to p3 4c
+wb   = 0.03; zeta = 1.8; % Tuning for task 4d (good one)
+%wb   = 0.1; zeta = 2.8; % Tuning for task 4d (ignore)
 
 wn = wb/sqrt(1-2*zeta^2+sqrt(4*zeta^4-4*zeta^2+2));
 K_nom = 7.4931e-03;
 T_nom = 169.55;
 % Nomoto when Uref = 9 m/s
-%K_nom = 7.68e-03;
-%T_nom = 174.2;
+%K_nom = -0.0049;
+%T_nom = -99.4713;
 m = T_nom/K_nom;
 d = 1/K_nom;
 k = 0;
@@ -220,10 +222,10 @@ for i = 1:nTimeSteps
         psi_fb = x_pst(1);     % estimated yaw
         r_fb   = x_pst(2);     % estimated yaw rate
     else
-        %psi_fb = psi_meas; % noisy yaw
-        %r_fb = r_meas;     % noisy yaw rate
-        psi_fb = x(6);     % noisy yaw
-        r_fb   = x(3);       % noisy yaw rate
+        psi_fb = psi_meas; % noisy yaw
+        r_fb = r_meas;     % noisy yaw rate
+        %psi_fb = x(6);     % noisy yaw
+        %r_fb   = x(3);       % noisy yaw rate
     end
 
     e_psi = ssa(psi_fb - psi_d);
@@ -371,11 +373,12 @@ figure(gcf)
 plot(t, chi_deg,   'LineWidth', 2); hold on;
 plot(t, chi_d_deg, 'LineWidth', 2);
 plot(t, psi_deg,   'LineWidth', 2);
+plot(t, psi_d_deg, 'LineWidth', 2);
 plot(t, beta_c_deg,'--',        'LineWidth', 1.5);
 plot(t, beta_deg,  '--',        'LineWidth', 1.5);
 grid on; xlabel('Time (s)'); ylabel('Angle (deg)');
-title('Course (χ), Desired Course (χ_d), Heading (ψ), Crab (β_c), Sideslip (β)');
-legend('\chi','\chi_d','\psi','\beta_c','\beta','Location','best');
+title('Course (χ), Desired Course (χ_d), Heading (ψ), Desired Heading (ψ), Crab (β_c), Sideslip (β)');
+legend('\chi','\chi_d','\psi', '\psi_d','\beta_c','\beta','Location','best');
 
 figure(5); clf; figure(gcf)
 subplot(2,1,1)

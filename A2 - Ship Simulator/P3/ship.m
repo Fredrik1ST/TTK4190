@@ -55,7 +55,7 @@ xg = -3.7;              % CG x-ccordinate (m)
 L = 161;                % length (m)
 B = 21.8;               % beam (m)
 T = 8.9;                % draft (m)
-%KT = 0.7;               % propeller coefficient (-)
+%KT = 0.7;              % propeller coefficient (-)
 Dia = 3.3;              % propeller diameter (m)
 rho = 1025;             % density of water (m/s^3)
 

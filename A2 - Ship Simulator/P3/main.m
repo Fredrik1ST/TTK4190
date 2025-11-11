@@ -20,6 +20,7 @@ nu_0  = [0 0 0]';
 delta_0 = 0;
 n_0 = 0;
 Qm_0 = 0;
+% x = [ u v r x y psi delta n Qm ]'   % Ship state vector explanation
 x = [nu_0' eta_0' delta_0 n_0 Qm_0]'; % The state vector can be extended with addional states here
 
 USE_KF = true;  % toggle: true -> use KF estimates; false -> use noisy measurements
@@ -36,7 +37,7 @@ wb   = 0.03; zeta = 1.8; % Tuning for task 4d
 wn = wb/sqrt(1-2*zeta^2+sqrt(4*zeta^4-4*zeta^2+2));
 K_nom = 7.4931e-03;
 T_nom = 169.55;
-% Nomoto when Uref = 9 m/s
+%Nomoto when Uref = 9 m/s
 %K_nom = 7.68e-03;
 %T_nom = 174.2;
 m = T_nom/K_nom;
@@ -175,9 +176,12 @@ for i = 1:nTimeSteps
     % Guidance law
     [xk1,yk1,xk,yk,last] = WP_selector(x(4),x(5), WP, Rsw, Rstop);
     [e_y,pi_p] = crossTrackError(xk1,yk1,xk,yk,x(4),x(5));
+    % LOS guidance law is used to find course angle to next waypoint
+    % (Used to find desired heading angle for autopilot)
     chi_d = LOS_guidance(e_y,pi_p, Delta_h);
-    %psi_ref = chi_d - beta_c;
-    psi_ref = ILOS_guidance(e_y, pi_p, kappa, Delta_h, h);
+    %psi_ref = chi_d;            % For pure LOS without crab
+    psi_ref = chi_d - beta_c;   % For LOS with crab angle compensation
+    %psi_ref = ILOS_guidance(e_y, pi_p, kappa, Delta_h, h);
     xd_dot = ref_model(xd, psi_ref);
     xd = xd + h * xd_dot;
     psi_d = xd(1);
@@ -219,16 +223,23 @@ for i = 1:nTimeSteps
     if USE_KF
         psi_fb = x_pst(1);     % estimated yaw
         r_fb   = x_pst(2);     % estimated yaw rate
+        KALMAN_IS_ON = true;
     else
-        %psi_fb = psi_meas; % noisy yaw
-        %r_fb = r_meas;     % noisy yaw rate
-        psi_fb = x(6);     % noisy yaw
-        r_fb   = x(3);       % noisy yaw rate
+        %psi_fb = psi_meas;    % noisy yaw
+        %r_fb = r_meas;        % noisy yaw rate
+        psi_fb = x(6);         % noisy yaw
+        r_fb   = x(3);         % noisy yaw rate
+        KALMAN_IS_ON = false;
     end
-
+    
     e_psi = ssa(psi_fb - psi_d);
     e_r   = r_fb - r_d;
     e_u   = x(1) - u_d;
+
+    % Gains from TA:
+    kp = 176.4330;
+    Ki = 1.6448;
+    Kd = 3.891e+03;
     delta_unsat = -(kp*e_psi + kd*e_r + ki*e_int);
 
     %delta_step = delta_unsat - delta_cmd;

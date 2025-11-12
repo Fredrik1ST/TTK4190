@@ -26,7 +26,7 @@ x = [nu_0' eta_0' delta_0 n_0 Qm_0]'; % The state vector can be extended with ad
 xdot = zeros(size(x));
 
 USE_ESKF = true; % Takes priority
-USE_KF = true;  % toggle: true -> use KF estimates; false -> use noisy measurements
+USE_KF = false;  % toggle: true -> use KF estimates; false -> use noisy measurements
 
 % 6b) ESKF
 % ESKF state vector for INS
@@ -233,7 +233,9 @@ for i = 1:nTimeSteps
     psi_true_hist(i) = psi_true;
     r_true_hist(i)   = r_true;
 
-    % Run the kalman filter
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    % Run Kalman Filter
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
     [x_pst,P_pst,x_prd,P_prd_KF] = KF(x_prd,P_prd_KF,Ad,Bd,Ed,Cd,Qd_KF,Rd_KF,psi_meas,x(7));
 

@@ -60,7 +60,7 @@ nTimeSteps = length(t);         % Number of time steps
 
 simdata = zeros(nTimeSteps, 17); % Pre-allocate matrix for efficiency
 
-% Kalman filter initialization
+% 3 Kalman filter initialization
 rng(1)                             % reproducibility
 sigma_psi = deg2rad(0.5);          % [rad] std of yaw measurement noise
 sigma_r   = deg2rad(0.1);          % [rad/s] std of yaw-rate measurement noise
@@ -180,7 +180,7 @@ for i = 1:nTimeSteps
     % (Used to find desired heading angle for autopilot)
     chi_d = LOS_guidance(e_y,pi_p, Delta_h);
     %psi_ref = chi_d;            % For pure LOS without crab
-    psi_ref = chi_d - beta_c;   % For LOS with crab angle compensation
+    psi_ref = chi_d - beta_c;    % For LOS with crab angle compensation
     %psi_ref = ILOS_guidance(e_y, pi_p, kappa, Delta_h, h);
     xd_dot = ref_model(xd, psi_ref);
     xd = xd + h * xd_dot;
@@ -214,7 +214,7 @@ for i = 1:nTimeSteps
     [x_pst,P_pst,x_prd,P_prd] = KF(x_prd,P_prd,Ad,Bd,Ed,Cd,Qd,Rd,psi_meas,x(7));
 
     % Log for plotting
-    % Logg estimater
+    % Log estimates
     psi_hat_hist(i) = x_pst(1);
     r_hat_hist(i)   = x_pst(2);
     b_hat_hist(i)   = x_pst(3);
@@ -223,23 +223,22 @@ for i = 1:nTimeSteps
     if USE_KF
         psi_fb = x_pst(1);     % estimated yaw
         r_fb   = x_pst(2);     % estimated yaw rate
-        KALMAN_IS_ON = true;
     else
         %psi_fb = psi_meas;    % noisy yaw
         %r_fb = r_meas;        % noisy yaw rate
         psi_fb = x(6);         % noisy yaw
         r_fb   = x(3);         % noisy yaw rate
-        KALMAN_IS_ON = false;
     end
     
     e_psi = ssa(psi_fb - psi_d);
     e_r   = r_fb - r_d;
     e_u   = x(1) - u_d;
 
-    % Gains from TA:
-    kp = 176.4330;
-    Ki = 1.6448;
-    Kd = 3.891e+03;
+    % Gains from TA for testing:
+    %kp = 176.4330;
+    %Ki = 1.6448;
+    %Kd = 3.891e+03;
+
     delta_unsat = -(kp*e_psi + kd*e_r + ki*e_int);
 
     %delta_step = delta_unsat - delta_cmd;

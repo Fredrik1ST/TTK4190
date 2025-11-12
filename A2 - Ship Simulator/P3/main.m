@@ -11,7 +11,8 @@ addpath(genpath('flypath3d_v2'))
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 clc; clear; clear WP_selector ILOS_guidance; close all; 
 T_final = 6400;	        % Final simulation time (s)
-h = 0.1;                % Sampling time (s)
+h = 0.1;                % Sampling time 10Hz (s)
+h_gnss = 0.2;           % Sampling time 5Hz for GNSS (s)
 U_ref   = 9;            % desired surge speed (m/s)
 
 % initial states
@@ -22,9 +23,30 @@ n_0 = 0;
 Qm_0 = 0;
 % x = [ u v r x y psi delta n Qm ]'   % Ship state vector explanation
 x = [nu_0' eta_0' delta_0 n_0 Qm_0]'; % The state vector can be extended with addional states here
+xdot = zeros(size(x));
 
+USE_ESKF = true; % Takes priority
 USE_KF = true;  % toggle: true -> use KF estimates; false -> use noisy measurements
 
+% 6b) ESKF
+% ESKF state vector for INS
+% Inc. position, velocity, accelerometer biases, orientation, and gyroscope biases.
+p_ins = [0 0 0]'; 
+v_ins = [0 0 0]';
+b_acc_ins = [0 0 0]';
+theta_ins = [0, 0, deg2rad(-110)]';
+b_ars_ins = [0 0 0]';
+x_ins = [p_ins; v_ins; b_acc_ins; theta_ins; b_ars_ins];
+
+% Magnetic field and matitude for city #1 (Trondheim)
+[m_ref, ~,mu,cityName] = magneticField(1);
+% ESKF covariance matrices (from SIMaidedINSeuler)
+P_prd = eye(15);
+% Process noise weights: vel, acc_bias, w_nb, ars_bias
+Qd = diag([0.1 0.1 0 0.001 0.001 0 0 0 0.1 0 0 0.001]);
+% Measuremenet noise weights: pos, acc, compass
+Rd = diag([0.1 0.1 0.1 1 1 1 0.1]);
+t_slow = 0; % Used to update GNSS readings
 
 % Reference model initialization
 xd = [0; 0; 0];  % [psi_d, r_d, v_d]
@@ -90,11 +112,13 @@ Ed = h*E;
 
 % KF initialization
 x_prd = [0;0;0];            % [psi_hat; r_hat; b_hat]
-P_prd = diag([(deg2rad(30))^2, (deg2rad(0.01))^2, (deg2rad(1))^2]);
+P_prd_KF = diag([(deg2rad(30))^2, (deg2rad(0.01))^2, (deg2rad(1))^2]);
 
-% Tuning (starting point – adjust during tests)
-Qd = diag([1e-11, 1e-7]);    % var{w_r}, var{w_b}
-Rd = sigma_psi^2;           % var of psi measurement
+% KF Tuning (starting point – adjust during tests)
+Qd_KF = diag([1e-11, 1e-7]);    % var{w_r}, var{w_b}
+Rd_KF = sigma_psi^2;           % var of psi measurement
+
+% 
 
 % Guidance model initialization
 % --- Waypoints ---
@@ -211,7 +235,7 @@ for i = 1:nTimeSteps
 
     % Run the kalman filter
 
-    [x_pst,P_pst,x_prd,P_prd] = KF(x_prd,P_prd,Ad,Bd,Ed,Cd,Qd,Rd,psi_meas,x(7));
+    [x_pst,P_pst,x_prd,P_prd_KF] = KF(x_prd,P_prd_KF,Ad,Bd,Ed,Cd,Qd_KF,Rd_KF,psi_meas,x(7));
 
     % Log for plotting
     % Log estimates
@@ -219,8 +243,67 @@ for i = 1:nTimeSteps
     r_hat_hist(i)   = x_pst(2);
     b_hat_hist(i)   = x_pst(3);
 
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    % Part 3, 6b) ESKF
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-    if USE_KF
+    R_b2n = Rzyx(0, 0, x(6));
+
+    % Compute the IMU specific force vector and angular rates
+    g_n = [0 0 9.81]'; % NED gravity vector 
+    % Here we assume that IMU is aligned with CO otherwise additional compensation
+    % (r_bmI) has to happen according to (eq. 14.13, Fossen 2021 or p. 17-18 in L9.pdf)
+    % Remember that x and xdot represent the motion about CO, 
+    % the transformation is given in ship.m by:
+    % xg = -3.7; % CG x-ccordinate (m)
+    % The gyro measurement is given by the simulated ​angular velocity, you just need to add noise and bias
+    
+
+    % Extract true states
+    w_gyro_b = [0,0,x(3)]';
+    f_imu_b = [xdot(1),xdot(2),0]' + Smtrx([0,0,x(3)]') * [x(1),x(2),0]' - R_b2n' * g_n; % (eq. 14.14, Fossen 2021 or p. 17-18 in L9.pdf)
+    gps_pos_true = [x(4:5)',0]';
+    gps_vel_true = R_b2n*[x(1:2)',0]';
+
+    % Sensor noise
+    sigma_accel = 0.001; % m/s^2 (accelerometer)
+    sigma_gyro = 0.0000175; % rad/s (gyroscope)
+    sigma_gps_pos = 0.025; % meters (RTK GPS position)
+    sigma_gps_vel = 0.02; % m/s (RTK GPS velocity)
+    sigma_compass_psi = deg2rad(0.5); % rad (compass)
+
+    w1 = sigma_accel * randn(3,1);
+    w2 = sigma_gyro * randn(3,1);
+    w3 = sigma_gps_pos * randn(3,1);
+    w4 = sigma_gps_vel * randn(3,1);
+    w5 = sigma_compass_psi * randn(1);
+
+    % Bias
+    b_accel = [0 0 0]';
+    b_gyro = [0 0 0]';
+
+    f_imu = f_imu_b + b_accel + w1;
+    w_imu = w_gyro_b + b_gyro + w2;
+    gps_pos = gps_pos_true + w3;
+    gps_vel = gps_vel_true + w4;
+    y_psi = x(6) + w5; % compass
+
+    % Positions measurements (GNSS) are slower than the sampling time
+    if t(i) > t_slow
+        % Position aiding + compass aiding
+        [x_ins,P_prd] = ins_euler(x_ins,P_prd,mu,h,Qd,Rd,f_imu,w_imu,y_psi,gps_pos);
+        % Update the time for the next slow position measurement
+        t_slow = t_slow + h_gnss;
+    else
+        [x_ins,P_prd] = ins_euler(x_ins,P_prd,mu,h,Qd,Rd,f_imu,w_imu,y_psi);
+    end
+
+
+    % Get states from measurements, KF or ESKF
+    if USE_ESKF
+        psi_fb = x_ins(12);             % estimated yaw from ESKF
+        r_fb   = w_imu(3) - x_ins(15);  % yaw rate = gyro minus bias
+    elseif USE_KF
         psi_fb = x_pst(1);     % estimated yaw
         r_fb   = x_pst(2);     % estimated yaw rate
     else
@@ -253,6 +336,7 @@ for i = 1:nTimeSteps
     e_int_dot = e_psi - (1/ki)*(delta_c - delta_unsat);
     e_int = e_int + h * e_int_dot;
 
+
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Part 2, 3e) Add open loop speed control here
     % Define it as a function
@@ -276,6 +360,7 @@ for i = 1:nTimeSteps
     % ship dynamics
     u = [delta_c n_c]';
     [xdot,tau_total] = ship(x,u,nu_c,tau_wind);
+
     
     % store simulation data in a table (for testing)
     simdata(i,:) = [x(1:3)' x(4:6)' x(7) x(8) u(1) u(2) u_d psi_d r_d, chi, chi_d, beta_c, beta];     
